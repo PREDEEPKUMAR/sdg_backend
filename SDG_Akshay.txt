@@ -1,0 +1,315 @@
+!pip install openai
+
+
+import json
+
+from openai import AzureOpenAI
+
+client = AzureOpenAI(
+  azure_endpoint = "https://bic-gen-openai.openai.azure.com/",
+  api_key="f36d9d7b0f3845658d9f808c0ca70944",
+  api_version="2024-02-15-preview"
+)
+
+
+
+# Setting up the interaction with Open-AI with different roles & system roles
+
+def get_response_from_openai(sys_inp, user_inp):
+
+
+    response = client.chat.completions.create(
+    model="bic-gpt-35-turbo-16k-0613", # model = "deployment_name".
+          messages=[
+            {"role": "system", "content": sys_inp},
+            {"role": "user", "content": f"{user_inp}"}
+        ],
+      temperature=0.8,
+      top_p=0.4,
+      frequency_penalty=0,
+      presence_penalty=0,
+      stop=None
+    )
+    content = response.choices[0].message.content
+    return content
+
+
+def get_response_from_ex_openai(sys_inp, usr_sample_inp, ass_sample_output, user_inp):
+
+    response = client.chat.completions.create(
+      model="bic-gpt-35-turbo-16k-0613", # model = "deployment_name".
+      messages=[
+            {"role": "system", "content": sys_inp},
+            {"role": "user", "content": f"{usr_sample_inp}"},
+            {"role": "assistant", "content": f"{ass_sample_output}"},
+            {"role": "user", "content": f"{user_inp}"}
+        ],
+      temperature=0.8,
+      top_p=0.4,
+      frequency_penalty=0,
+      presence_penalty=0,
+      stop=None
+    )
+    content = response.choices[0].message.content
+    return content
+
+
+
+# USER PROVIDED ASSOCIATED TABLES & APPLICATION CONTEXT
+
+source_tables = ['claims_data', 'policy_holder', 'claims_type', 'claims_status', 'adjuster', 'department', 'supervisor', 'policy_type']
+application_context = "The application uses the claims-data and represents it on the UI. UI uses the backend service to fetch the claims data available in the Database. Thus, the claims data will have all the associated terms that are applicable in the Insurance industry"
+
+
+# HARCODED METADATA ( which comes from the database )
+# Metadata details contained referenced columns
+
+table_ref_metadata = {
+  "tables": [
+    {
+      "name": "claims_data",
+      "foreign_keys": [
+        {
+          "column": "Policyholder_ID",
+          "references": {
+            "table": "policy_holder",
+            "column": "Policyholder_ID"
+          }
+        },
+        {
+          "column": "Adjuster_ID",
+          "references": {
+            "table": "adjuster",
+            "column": "Adjuster_ID"
+          }
+        },
+        {
+          "column": "Claim_Type_ID",
+          "references": {
+            "table": "claims_type",
+            "column": "Claim_Type_ID"
+          }
+        },
+        {
+          "column": "Status_ID",
+          "references": {
+            "table": "claims_status",
+            "column": "Status_ID"
+          }
+        }
+      ]
+    },
+    {
+      "name": "policy_holder",
+      "foreign_keys": [
+        {
+          "column": "Policy_Type_ID",
+          "references": {
+            "table": "policy_type",
+            "column": "Policy_Type_ID"
+          }
+        }
+      ]
+    },
+    {
+      "name": "adjuster",
+      "foreign_keys": [
+        {
+          "column": "Department_ID",
+          "references": {
+            "table": "department",
+            "column": "Department_ID"
+          }
+        },
+        {
+          "column": "Supervisor_ID",
+          "references": {
+            "table": "supervisor",
+            "column": "Supervisor_ID"
+          }
+        }
+      ]
+    },
+    {
+      "name": "supervisor",
+      "foreign_keys": [
+        {
+          "column": "Department_ID",
+          "references": {
+            "table": "department",
+            "column": "Department_ID"
+          }
+        }
+      ]
+    }
+  ]
+}
+
+# Metadata details containing all column details with datatype
+
+table_col_metadata = {
+  'claims_data': {'Claim_ID':'INT','Policyholder_ID':'INT','Adjuster_ID':'INT','Date_Filed':'DATE','Date_Resolved':'DATE','Claim_Type_ID':'INT','Amount':'DECIMAL','Status_ID':'INT'},
+  'policy_holder': {'Policyholder_ID': 'INT', 'Name': 'VARCHAR(50)', 'Address': 'VARCHAR(100)', 'Contact_Number': 'VARCHAR(20)', 'Policy_Number': 'VARCHAR(20)', 'Policy_Type_ID': 'INT', 'Premium_Amount': 'DECIMAL'},
+  'claims_type': {'Claim_Type_ID': 'INT', 'Claim_Type': 'VARCHAR(50)'},
+  'claims_status': {'Status_ID': 'INT', 'Status': 'VARCHAR(20)'},
+  'adjuster': {'Adjuster_ID': 'INT', 'Name': 'VARCHAR(50)', 'Department_ID': 'INT', 'Experience': 'INT', 'Contact_Number': 'VARCHAR(20)', 'Supervisor_ID': 'INT'},
+  'department': {'Department_ID': 'INT', 'Department_Name': 'VARCHAR(50)'},
+  'supervisor': {'Supervisor_ID': 'INT', 'Name': 'VARCHAR(50)', 'Department_ID': 'INT'},
+  'policy_type': {'Policy_Type_ID': 'INT', 'Name': 'VARCHAR(50)', 'Description': 'VARCHAR(50)'}
+}
+
+
+
+# FIND TABLE ORDER
+foreign_key_tables = [table['name'] for table in table_ref_metadata['tables']]
+print(f'Foreign KEY Tables: {foreign_key_tables}')
+
+only_primary_key_tables = [table for table in source_tables if table not in foreign_key_tables]
+print(f'Primary KEY Tables: {only_primary_key_tables}')
+
+foreign_key_lengths = {}
+
+for table in table_ref_metadata["tables"]:
+    table_name = table["name"]
+    foreign_keys = table["foreign_keys"]
+    foreign_key_lengths[table_name] = len(foreign_keys)
+
+print(foreign_key_lengths)
+
+from collections import defaultdict
+
+def order_dict(input_dict):
+    # Create a defaultdict to group items by values
+    ordered_dict = defaultdict(list)
+
+    # Iterate through the input dictionary
+    for key, value in input_dict.items():
+        ordered_dict[value].append(key)
+
+    # Sort the keys
+    sorted_keys = sorted(ordered_dict.keys())
+
+    # Create the final ordered dictionary
+    table_order = {key: ordered_dict[key] for key in sorted_keys}
+
+    return table_order
+
+# Get the ordered dictionary
+table_order = order_dict(foreign_key_lengths)
+
+
+table_order[0] = only_primary_key_tables
+
+
+# FIND TABLE ORDER
+sorted_keys = sorted(table_order.keys())
+# Create the final ordered dictionary
+table_order = {key: table_order[key] for key in sorted_keys}
+print(table_order)
+
+
+
+# GENERATE PATTERN using LLM  | Processing for tables with 0 Foreign Keys &  IMPLEMENTATION OF CONNECTING WITH LLM MODELS
+pattern_generated = {}
+
+format = "{ column_name : [data_type, pattern, column_context, possible values] }"
+
+sys_msg = "You are going to act as a pattern generator for a given table."
+
+for table in table_order.get(0):
+  input_pattern = {table: table_col_metadata.get(table)}
+  generate_pattern_prompt = f'''The table name, column names & it's associated properties are displayed as follows {input_pattern} where {table} is table name & other keys are column name & it's datatype in the value of those keys. Considering the application context as follows '{application_context}'. Kindly generate a pattern which has the appropriate "pattern", "column_context", "possible_value" for that column considering the application context in the below format:   {format}. The output should be realistic considering the application context and how it fits in the column name. '''
+  print('*************************************************************************************************************************************')
+  print(f'PROMPT: {generate_pattern_prompt}')
+  response = get_response_from_openai(sys_msg, generate_pattern_prompt)
+  print(eval(response))
+  pattern_generated[table] = eval(response)
+
+
+
+
+
+
+## Interactive session to regenerate pattern
+nil_fk_syn_data = {}
+additional_context_tables = {}
+
+## Generate Synthectic Data only for 0 FK tables
+
+sys_msg = "You are going to act as a synthentic realtistic data generated for given table in requested pattern"
+
+def generate_syn_sam_data(table, pattern):
+  fd_prompt = f"For the table {table} and based on the pattern {pattern},  Please generate some 10 tabular data following this conditions.. Consider the application context as well '{application_context}' Show output in tabular data. OUTPUT ONLY THE TABULAR DATA"
+  response = get_response_from_openai(sys_msg, fd_prompt)
+  return response
+
+def generate_questions_from_llm(user_input):
+  sys_inp = "You are going to act as a realistic data analyzer and suggest multiple questions without deviating from the given columns."
+  usr_sample_inp = "For the given data <tabular_data> & the given pattern <pattern>. In-order to make the above tabular data realistic.. What are the important columns that needs to be tweaked to make the data realistic. The questions that are going to be asked to the user to get more info on the important columns that needs a tweak to add more context for realistic data. Don't add any extra columns apart from the given. Follow realistic pattern for all ID's as well. Once getting all the context regenerate the data. Filter questions that are important which add values & context to the data tables. Data Types are already given hence don't ask questions on those. OUTPUT SHOULD BE IN JSON"
+  ass_sample_output = '{ "Q1" : " Can you provide any specific guidelines for generating realistic names? For example, should the names be based on a specific culture or naming convention?" , "Q2" : "Are there any specific rules or patterns for assigning IDs", }'
+  response = get_response_from_ex_openai(sys_inp, usr_sample_inp, ass_sample_output, user_inp)
+  eval(response)
+  return response
+
+def question_generator(dict_questions):
+  # Load the JSON data
+  questions = json.loads(dict_questions)
+
+  # Iterate over each question and get input from the user
+  user_responses = {}
+  for key, question in questions.items():
+      user_input = input(question + " ")
+      user_responses[question] = user_input
+
+  # Print the user responses
+  print("User Responses:")
+  print(user_responses)
+  return user_responses
+
+def consolidation(user_responses):
+  sys_inp = "You are going to act Q&A reviewer and extract only required information"
+  usr_sample_inp = '''{'Are there any specific restrictions or limitations on the length of the claim type names?': 'No', 'Is there a specific order or hierarchy in which the claim types should be listed?': 'No', 'Should the claim type IDs be generated randomly or follow a specific pattern?': 'Yes.. with the pattern of CLM123'}    ---> For the above Q&A above, ignore the questions & answers with No responses and responses related to "I dont know", "ignore", "No" or which doesn't add any value... Consider responses only which add values to the questions or give important context.. Filtering all this, rewrite the context in short words which can be considered as additional context for table data generation'''
+  ass_sample_output = '''Claim type IDs should follow a specific pattern, namely "CLM123"'''
+  response = get_response_from_ex_openai(sys_inp, usr_sample_inp, ass_sample_output, user_responses)
+  print(response)
+  return response
+
+
+for table, pattern in pattern_generated.items():
+  response = generate_syn_sam_data(table, pattern)
+  i_data = response
+  nil_fk_syn_data[table]=i_data
+  # print(i_data)
+  # print('*************************************************')
+  # print('*************************************************')
+  print(nil_fk_syn_data.get(table))
+  user_inp = f'''{nil_fk_syn_data.get(table)} & Considering the pattern {pattern_generated.get(table)}.... DON"T ADD ANY EXTRA COLUMNS APART FROM {list(table_col_metadata.get(table).keys())}'''
+  questions_list = generate_questions_from_llm(user_inp)
+  user_resps = question_generator(questions_list)
+  additional_context = consolidation(user_resps)
+  additional_context_tables[table] = additional_context
+
+print(additional_context)
+
+
+
+# Re-generate Pattern
+
+regenerated_pattern = {}
+
+def regenerate_pattern(table, context):
+  sys_inp = "You are going to act as a Pattern Generator where you are going to re-generate pattern based on some additional context"
+  pattern = "{ column_name : [data_type, pattern, column_context, possible values] }"
+  usr_inp = f"Based on this additional context ---> {additional_context_tables.get(table)}, make changes only on the existing pattern. Add examples appropriotiy The reference pattern which needs to be regenerated is below ---> {pattern_generated.get(table)}. OUTPUT SHOULD BE ONLY IN JSON & should not deviate from this reference: {pattern}"
+  resp = get_response_from_openai(sys_inp, usr_inp)
+  regenerated_pattern[table] = eval(resp)
+
+for table, context in additional_context_tables.items():
+  regenerate_pattern(table, context)
+
+print(regenerated_pattern)
+
+
+
+
+QUESTIONS CAN BE ASKED ONLY for Geographical locations, Names, date range, integer range, time range, types of status, Boolean values, Based on the industry what kind of data it will be without deviating from the column data types. 
